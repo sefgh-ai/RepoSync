@@ -1,0 +1,5 @@
+print("Total API Keys Found:", TotalApikeys)
+print("Key Limits:", keyLimits)
+print("Boot Time:", BootTime)
+print("Up Time:", UpTime)
+print("Status Codes:", status_codes)
