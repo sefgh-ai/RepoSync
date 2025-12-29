@@ -9,9 +9,10 @@ query($topic: String!, $first: Int = 10, $after: String) {
         cursor # Cursor for pagination
         node {
           id
+          databaseId
           nameWithOwner # Full repository name (owner/repo)
           description # Description
-          url # GitHub URL
+        #   url # GitHub URL
           stargazerCount # Stars
           forkCount # Forks
           createdAt # Date created
@@ -61,22 +62,26 @@ query($topic: String!, $first: Int = 10, $after: String) {
 }
 """
 
-headers = {
+def fetch_repos(topic, github_token, page_size=50, after_cursor=None,GITHUB_API_URL="https://api.github.com/graphql"):
+    
+    headers = {
     "Authorization": f"Bearer {github_token}",
     "Content-Type": "application/json"
-}
+    }
 
-variables = {
-    "topic": topic_name,   # Change to any GitHub topic
-    "first": 50,
-    "after": None
-}
+    variables = {
+            "topic": topic,
+            "first": page_size,
+            "after": after_cursor
+        }
 
-response = requests.post(
-    GITHUB_API_URL,
-    json={
-        "query": QUERY,
-        "variables": variables
-    },
-    headers=headers
-)
+    response = requests.post(
+            GITHUB_API_URL,
+            json={"query": QUERY, "variables": variables},
+            headers=headers
+        )
+    
+    response.raise_for_status()
+    result = response.json()
+
+    return result
