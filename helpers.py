@@ -129,7 +129,7 @@ def fetch_repo_count(topic_name, github_token):
         if "errors" in data:
             print("GraphQL Errors:", data["errors"])
             return None
-        return data["data"]["topic"]["repositories"]["totalCount"]
+        return data["data"]["topic"]["repositories"]["totalCount"] if data["data"]["topic"] else print("Topic not found")
     else:
         print("HTTP Error:", response.status_code, response.text)
         return None
