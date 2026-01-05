@@ -1,6 +1,10 @@
+import os
 import requests
 import time
 import csv
+from dotenv import load_dotenv
+
+load_dotenv()
 
 def save_repos_to_csv(repos, filename="repos.csv"):
     fieldnames = [
@@ -120,7 +124,7 @@ query($topic: String!, $first: Int = 10, $after: String) {
 """
 
 GITHUB_API_URL = "https://api.github.com/graphql"
-GITHUB_TOKEN = "REMOVED_TOKEN"
+GITHUB_TOKEN = os.getenv("githubApiKey1")
 
 headers = {
     "Authorization": f"Bearer {GITHUB_TOKEN}",

@@ -1,4 +1,8 @@
+import os
 import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 QUERY = """
 query($topic: String!, $first: Int = 10, $after: String) {
@@ -63,7 +67,7 @@ query($topic: String!, $first: Int = 10, $after: String) {
 
 
 GITHUB_API_URL = "https://api.github.com/graphql"
-GITHUB_TOKEN = "REMOVED_TOKEN"
+GITHUB_TOKEN = os.getenv("githubApiKey1")
 
 headers = {
     "Authorization": f"Bearer {GITHUB_TOKEN}",
