@@ -19,33 +19,72 @@ class KeyManager:
         key_manager.update_from_response(rate_limit_data)  # Update after API call
     """
     
-    def __init__(self, env_dict, key_names):
+    def __init__(self, env_dict, key_names, validate_tokens=True):
         """Initialize with environment dict and list of key names."""
         self.keys = {}  # {key_name: {"token": "...", "remaining": 5000, "reset_at": datetime}}
         self.current_key = None
         
-        print("\n🔑 Initializing KeyManager...")
+        loaded_keys = []
+        missing_keys = []
+        invalid_keys = []  # Keys that exist but fail validation
         
         for key_name in key_names:
             token = env_dict.get(key_name)
             if token:
-                self.keys[key_name] = {
-                    "token": token,
-                    "remaining": 5000,  # Assume full limit initially
-                    "reset_at": None,
-                    "limit": 5000
-                }
-                print(f"   ✅ Loaded: {key_name}")
+                # Optionally validate the token by checking rate limit
+                if validate_tokens:
+                    rate_info = CheckTokenRateLimit(token)
+                    if rate_info is None:
+                        invalid_keys.append((key_name, "401 Unauthorized - Token invalid or expired"))
+                        continue
+                    self.keys[key_name] = {
+                        "token": token,
+                        "remaining": rate_info.get("RemainingRequests", 5000),
+                        "reset_at": datetime.fromisoformat(rate_info["ResetTime"].replace("Z", "+00:00")) if rate_info.get("ResetTime") else None,
+                        "limit": rate_info.get("TotalRequests", 5000)
+                    }
+                else:
+                    self.keys[key_name] = {
+                        "token": token,
+                        "remaining": 5000,
+                        "reset_at": None,
+                        "limit": 5000
+                    }
+                loaded_keys.append(key_name)
             else:
-                print(f"   ⚠️  Missing: {key_name}")
+                missing_keys.append((key_name, "Not found in .env file"))
+        
+        # Print clean summary
+        total = len(key_names)
+        success = len(loaded_keys)
+        failed = len(missing_keys) + len(invalid_keys)
+        
+        print("\n" + "=" * 50)
+        print("🔑 KeyManager Initialization")
+        print("=" * 50)
+        print(f"   Total Keys: {total} | ✅ Loaded: {success} | ❌ Failed: {failed}")
+        
+        if loaded_keys:
+            print(f"\n   ✅ Active Keys:")
+            for key_name in loaded_keys:
+                remaining = self.keys[key_name]["remaining"]
+                print(f"      • {key_name} ({remaining} requests available)")
+        
+        if missing_keys or invalid_keys:
+            print(f"\n   ❌ Failed Keys:")
+            for key_name, reason in missing_keys:
+                print(f"      • {key_name}: {reason}")
+            for key_name, reason in invalid_keys:
+                print(f"      • {key_name}: {reason}")
         
         if not self.keys:
+            print("=" * 50)
             raise ValueError("No valid API keys found!")
         
         # Set first key as current
         self.current_key = list(self.keys.keys())[0]
-        print(f"   🎯 Starting with: {self.current_key}")
-        print()
+        print(f"\n   🎯 Starting with: {self.current_key}")
+        print("=" * 50 + "\n")
     
     def get_key(self):
         """
@@ -148,10 +187,11 @@ class KeyManager:
 
 # ============================================================
 
-def CheckTokenRateLimit(token):
-    # Validate input
+def CheckTokenRateLimit(token, silent=True):
+    """Check token rate limit. Set silent=False to see debug output."""
     if not token or not isinstance(token, str) or len(token.strip()) == 0:
-        print("Error: Invalid or empty token provided")
+        if not silent:
+            print("Error: Invalid or empty token provided")
         return None
 
     try:
@@ -170,54 +210,51 @@ def CheckTokenRateLimit(token):
         """
 
         response = requests.post(url, json={'query': RateLimitCheckQuery}, headers=headers, timeout=10)
-        response.raise_for_status()  # Raise exception for bad status codes
+        response.raise_for_status()
         
         data = response.json()
         
-        # Validate response structure
         if 'data' not in data or data['data'] is None:
-            print(f"Error: Invalid API response - {data.get('errors', 'Unknown error')}")
+            if not silent:
+                print(f"Error: Invalid API response - {data.get('errors', 'Unknown error')}")
             return None
             
         if 'rateLimit' not in data['data']:
-            print("Error: rateLimit not found in API response")
+            if not silent:
+                print("Error: rateLimit not found in API response")
             return None
             
         rate = data['data']['rateLimit']
 
-        print(data) #print raw response for debugging only
-
-        # Return in your format
         return {
             "TotalRequests": rate["limit"],
             "UsedRequests": rate["used"],
             "RemainingRequests": rate["remaining"],
-            "ResetTime": rate["resetAt"] #return as ISO 8601 string not datetime object
+            "ResetTime": rate["resetAt"]
         }
     except requests.exceptions.Timeout:
-        print("Error: Request timed out")
+        if not silent:
+            print("Error: Request timed out")
         return None
     except requests.exceptions.RequestException as e:
-        print(f"Error: Network request failed - {e}")
+        if not silent:
+            print(f"Error: Network request failed - {e}")
         return None
     except KeyError as e:
-        print(f"Error: Missing key in response - {e}")
+        if not silent:
+            print(f"Error: Missing key in response - {e}")
         return None
     except Exception as e:
-        print(f"Error: Unexpected error occurred - {e}")
+        if not silent:
+            print(f"Error: Unexpected error occurred - {e}")
         return None
 
 def maskKey(value):
     return value[:3] + "****" + value[-3:] if value else None
 
 def get_total_apikeys(env_dict, prefix="githubApiKey"):
-
+    """Get all API key names matching the prefix. Returns (count, key_names)."""
     matching_keys = [k for k in env_dict.keys() if k.startswith(prefix)]
-
-    print("Total matching keys:", len(matching_keys))
-    print("Available keys:")
-    for key in matching_keys:
-        print("-", key)
     return len(matching_keys), matching_keys
 
 """
@@ -226,23 +263,24 @@ def get_total_apikeys(env_dict, prefix="githubApiKey"):
 @type of limits:
  key used, remaining requests, reset time, total limit.
 """
-def get_keys_rate_limits(env_dict, key_names):
-    # Validate inputs
+def get_keys_rate_limits(env_dict, key_names, silent=True):
+    """Get rate limits for all keys. Set silent=False to see warnings."""
     if not env_dict or not isinstance(env_dict, dict):
-        print("Error: Invalid env_dict provided")
+        if not silent:
+            print("Error: Invalid env_dict provided")
         return {}
     
     if not key_names or not isinstance(key_names, list):
-        print("Error: Invalid key_names provided")
+        if not silent:
+            print("Error: Invalid key_names provided")
         return {}
     
     limits = {}
     for key in key_names:
         token = env_dict.get(key)
         if token:
-            limits[key] = CheckTokenRateLimit(token) # Fetch and store rate limit info
+            limits[key] = CheckTokenRateLimit(token)
         else:
-            print(f"Warning: Key '{key}' not found in env_dict")
             limits[key] = None
     return limits
 

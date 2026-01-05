@@ -20,16 +20,10 @@ service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 TotalApikeys,KeyNames = get_total_apikeys(dotenv_values(".env"), prefix="githubApiKey") #fetch total apikeys from .env file
 # TotalGithubApps,AppsNames = get_total_apps() 
 
-# Initialize KeyManager for automatic key rotation
-key_manager = KeyManager(dotenv_values(".env"), KeyNames)
+# Initialize KeyManager for automatic key rotation (validates tokens and shows summary)
+key_manager = KeyManager(dotenv_values(".env"), KeyNames, validate_tokens=True)
 
-keyLimits =  get_keys_rate_limits(dotenv_values(".env"), KeyNames)
-
-print("Total API Keys Found:", TotalApikeys)
-print("Key Limits:", keyLimits)
-print("Boot Time:", BootTime)
-print("Up Time:", UpTime())
-print("Status Codes:", repo_sync_status_codes)
+print(f"⏰ Boot Time: {BootTime} | Up Time: {UpTime()}")
 
 supabase: Client = create_client(url, service_role_key)
 
