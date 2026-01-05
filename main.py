@@ -2,7 +2,7 @@ from supabase import create_client, Client
 from dotenv import load_dotenv, dotenv_values
 import os
 from datetime import datetime, timezone
-from helpers import fetch_repo_count, get_keys_rate_limits, get_total_apikeys , repo_sync_status_codes
+from helpers import fetch_repo_count, get_keys_rate_limits, get_total_apikeys, repo_sync_status_codes, KeyManager
 from githubApp import fetch_repos
 import time as time_module
 
@@ -19,6 +19,9 @@ service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
 TotalApikeys,KeyNames = get_total_apikeys(dotenv_values(".env"), prefix="githubApiKey") #fetch total apikeys from .env file
 # TotalGithubApps,AppsNames = get_total_apps() 
+
+# Initialize KeyManager for automatic key rotation
+key_manager = KeyManager(dotenv_values(".env"), KeyNames)
 
 keyLimits =  get_keys_rate_limits(dotenv_values(".env"), KeyNames)
 
@@ -77,10 +80,10 @@ while True:
             }).eq("topic", topic_name).execute()
 
             #select available apikey with available remaining limit
-            token_selected =  os.getenv(KeyNames[0])  # Using the first key for simplicity need to improve logic here
+            token_selected = key_manager.get_key()  # KeyManager handles rotation automatically
 
             #total repos for this topic
-            actual_total_repos_github = fetch_repo_count(topic_name,token_selected)  # Using the first key for simplicity
+            actual_total_repos_github = fetch_repo_count(topic_name, token_selected)
 
             #start fetching repos for this topic using pagination
             all_repos = []
@@ -100,7 +103,12 @@ while True:
             print("="*60 + "\n")
             
             while True:
+                token_selected = key_manager.get_key()  # Get best available key (may rotate)
                 fetch_repos_result = fetch_repos(topic_name, token_selected, page_size=50, after_cursor=after_cursor)
+                
+                # Update KeyManager with rate limit info from response
+                key_manager.update_from_response(fetch_repos_result['data']['rateLimit'])
+                
                 total_api_calls_cost += fetch_repos_result['data']['rateLimit']['cost'] #track api cost
                 repos_data = fetch_repos_result['data']['topic']['repositories']
                 edges = repos_data['edges']

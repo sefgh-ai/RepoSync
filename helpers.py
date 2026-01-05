@@ -1,7 +1,152 @@
 import requests
+from datetime import datetime, timezone
+import time
 
 repo_sync_status_codes = ["idle", "running", "completed", "failed"]
 topic_status_codes = ["pending", "in_progress", "completed"]
+
+
+# ============================================================
+# KEY MANAGER - Handles API key rotation automatically
+# ============================================================
+class KeyManager:
+    """
+    Manages multiple GitHub API keys with automatic rotation.
+    
+    Usage:
+        key_manager = KeyManager(env_dict, key_names)
+        token = key_manager.get_key()           # Get best available key
+        key_manager.update_from_response(rate_limit_data)  # Update after API call
+    """
+    
+    def __init__(self, env_dict, key_names):
+        """Initialize with environment dict and list of key names."""
+        self.keys = {}  # {key_name: {"token": "...", "remaining": 5000, "reset_at": datetime}}
+        self.current_key = None
+        
+        print("\n🔑 Initializing KeyManager...")
+        
+        for key_name in key_names:
+            token = env_dict.get(key_name)
+            if token:
+                self.keys[key_name] = {
+                    "token": token,
+                    "remaining": 5000,  # Assume full limit initially
+                    "reset_at": None,
+                    "limit": 5000
+                }
+                print(f"   ✅ Loaded: {key_name}")
+            else:
+                print(f"   ⚠️  Missing: {key_name}")
+        
+        if not self.keys:
+            raise ValueError("No valid API keys found!")
+        
+        # Set first key as current
+        self.current_key = list(self.keys.keys())[0]
+        print(f"   🎯 Starting with: {self.current_key}")
+        print()
+    
+    def get_key(self):
+        """
+        Get the best available API key token.
+        - Returns key with most remaining requests
+        - If all exhausted, waits for earliest reset
+        """
+        # Find key with most remaining requests
+        best_key = None
+        best_remaining = -1
+        
+        for key_name, info in self.keys.items():
+            if info["remaining"] > best_remaining:
+                best_remaining = info["remaining"]
+                best_key = key_name
+        
+        # If best key has no remaining requests, wait for reset
+        if best_remaining <= 0:
+            self._wait_for_reset()
+            return self.get_key()  # Retry after waiting
+        
+        # Switch key if needed
+        if best_key != self.current_key:
+            old_key = self.current_key
+            self.current_key = best_key
+            print(f"\n🔄 KEY ROTATION: {old_key} → {best_key}")
+            print(f"   Reason: {old_key} exhausted, {best_key} has {best_remaining} remaining\n")
+        
+        return self.keys[self.current_key]["token"]
+    
+    def update_from_response(self, rate_limit_data):
+        """
+        Update key limits from API response's rateLimit field.
+        
+        Args:
+            rate_limit_data: {"remaining": 4500, "resetAt": "2026-01-05T12:00:00Z", "limit": 5000, "cost": 1}
+        """
+        if not rate_limit_data or not self.current_key:
+            return
+        
+        key_info = self.keys[self.current_key]
+        key_info["remaining"] = rate_limit_data.get("remaining", key_info["remaining"])
+        key_info["limit"] = rate_limit_data.get("limit", key_info["limit"])
+        
+        # Parse reset time
+        reset_str = rate_limit_data.get("resetAt")
+        if reset_str:
+            key_info["reset_at"] = datetime.fromisoformat(reset_str.replace("Z", "+00:00"))
+        
+        # Log when getting low
+        if key_info["remaining"] < 100:
+            print(f"   ⚠️  {self.current_key}: Only {key_info['remaining']} requests left!")
+    
+    def _wait_for_reset(self):
+        """Wait for the earliest key to reset."""
+        # Find earliest reset time
+        earliest_reset = None
+        earliest_key = None
+        
+        for key_name, info in self.keys.items():
+            if info["reset_at"]:
+                if earliest_reset is None or info["reset_at"] < earliest_reset:
+                    earliest_reset = info["reset_at"]
+                    earliest_key = key_name
+        
+        if earliest_reset is None:
+            # No reset time known, wait 60 seconds as fallback
+            print("\n⏳ All keys exhausted. Waiting 60s (no reset time known)...")
+            time.sleep(60)
+            # Reset all keys to try again
+            for key_info in self.keys.values():
+                key_info["remaining"] = 5000
+            return
+        
+        # Calculate wait time
+        now = datetime.now(timezone.utc)
+        wait_seconds = (earliest_reset - now).total_seconds()
+        
+        if wait_seconds > 0:
+            wait_minutes = wait_seconds / 60
+            print(f"\n⏳ ALL KEYS EXHAUSTED!")
+            print(f"   Waiting for {earliest_key} to reset...")
+            print(f"   Reset at: {earliest_reset.strftime('%H:%M:%S UTC')}")
+            print(f"   Wait time: {wait_minutes:.1f} minutes ({wait_seconds:.0f} seconds)")
+            print()
+            time.sleep(wait_seconds + 5)  # Add 5s buffer
+        
+        # Reset the key's remaining count
+        self.keys[earliest_key]["remaining"] = self.keys[earliest_key]["limit"]
+        print(f"   ✅ {earliest_key} has reset! Resuming...\n")
+    
+    def get_status(self):
+        """Get current status of all keys (for logging)."""
+        status = []
+        for key_name, info in self.keys.items():
+            marker = "→" if key_name == self.current_key else " "
+            status.append(f"  {marker} {key_name}: {info['remaining']}/{info['limit']}")
+        return "\n".join(status)
+
+
+# ============================================================
 
 def CheckTokenRateLimit(token):
     # Validate input
